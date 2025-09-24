@@ -20,12 +20,13 @@ variables:
 # Job 1: Fetch code from GitHub at exact commit
 fetch-code:
   stage: fetch
-  image: alpine/git:latest  # Lightweight Git image
+  image: 
+    name: alpine/git:latest  # Lightweight Git image
   rules:
     - if: $CI_PIPELINE_SOURCE == "trigger"
   script:
     - echo "Fetching GitHub repo $REPO_URL at commit $COMMIT_SHA on branch $BRANCH"
-    - git clone $REPO_URL .  # Clone full repo
+    - git clone $REPO_URL .
     - git checkout $COMMIT_SHA  # Switch to exact pushed commit
     - ls -la  # Verify files (e.g., index.php, Dockerfile)
     - echo "Files fetched successfully"
@@ -51,13 +52,8 @@ build-image:
     - echo "Building image for commit $COMMIT_SHA"
     - docker info  # Verify Docker works
   script:
-    - |
-      # Build image using Dockerfile from fetched code
-      docker build \
-        --network=host \
-        -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA \  # Tag with commit SHA (e.g., root/my-app-2/my-app:e154b351...)
-        -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest \  # Also tag as 'latest'
-        .
+    # Build image using Dockerfile from fetched code (single line for docker build to avoid parsing issues)
+    - docker build --network=host -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest .
     - echo "Image built: $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA"
     - docker images  # List to verify
   needs: [fetch-code]
@@ -82,10 +78,9 @@ push-image:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
     - echo "Logged in to registry: $CI_REGISTRY (e.g., 164.52.193.41:5050)"
   script:
-    - |
-      # Push both tags
-      docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA
-      docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest
+    # Push both tags (separate commands)
+    - docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest
     - echo "Pushed image: $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA"
   needs: [build-image]
   when: on_success  # Only push if build succeeds
