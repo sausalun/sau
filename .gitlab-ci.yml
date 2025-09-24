@@ -1,7 +1,91 @@
-stages:
-  - test
+# Workflow: Allow triggers from GitHub webhook
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger"  # For webhook
+    - if: $CI_COMMIT_BRANCH  # Also allow manual GitLab pushes
 
-test_job:
-  stage: test
+# Stages: Sequential phases
+stages:
+  - fetch
+  - build-image
+  - push
+
+# Global variables
+variables:
+  GIT_STRATEGY: none  # Skip GitLab repo clone (fetch from GitHub)
+  REPO_URL: "https://github.aai.aero/Solarman/test5555.git"  # Your GitHub repo (overridden by webhook var if passed)
+  DOCKER_IMAGE_NAME: "my-app"  # Base name for pushed image (e.g., root/my-app-2/my-app)
+  DOCKER_TLS_CERTDIR: "/certs"  # For dind security
+
+# Job 1: Fetch code from GitHub at exact commit
+fetch-code:
+  stage: fetch
+  image: alpine/git:latest  # Lightweight Git image
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger"
   script:
-    - echo "Hello hi from GitLab Runner!"
+    - echo "Fetching GitHub repo $REPO_URL at commit $COMMIT_SHA on branch $BRANCH"
+    - git clone $REPO_URL .  # Clone full repo
+    - git checkout $COMMIT_SHA  # Switch to exact pushed commit
+    - ls -la  # Verify files (e.g., index.php, Dockerfile)
+    - echo "Files fetched successfully"
+  artifacts:
+    paths:
+      - .  # Pass all code (including Dockerfile) to next jobs
+    expire_in: 1 hour
+    when: always
+
+# Job 2: Build Docker image
+build-image:
+  stage: build-image
+  image: docker:24.0  # Docker CLI image
+  services:
+    - name: docker:24.0-dind  # Docker-in-Docker service (builds images)
+      alias: docker
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+  variables:
+    DOCKER_HOST: tcp://docker:2376  # Connect to dind
+    DOCKER_DRIVER: overlay2  # Efficient storage
+  before_script:
+    - echo "Building image for commit $COMMIT_SHA"
+    - docker info  # Verify Docker works
+  script:
+    - |
+      # Build image using Dockerfile from fetched code
+      docker build \
+        --network=host \
+        -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA \  # Tag with commit SHA (e.g., root/my-app-2/my-app:e154b351...)
+        -t $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest \  # Also tag as 'latest'
+        .
+    - echo "Image built: $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA"
+    - docker images  # List to verify
+  needs: [fetch-code]
+  artifacts:
+    reports:
+      dotenv: build.env  # Optional: Export vars if needed downstream
+
+# Job 3: Push image to GitLab Container Registry
+push-image:
+  stage: push
+  image: docker:24.0
+  services:
+    - name: docker:24.0-dind
+      alias: docker
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_DRIVER: overlay2
+  before_script:
+    # Auto-login using GitLab's built-in registry credentials (no token needed)
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+    - echo "Logged in to registry: $CI_REGISTRY (e.g., 164.52.193.41:5050)"
+  script:
+    - |
+      # Push both tags
+      docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA
+      docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:latest
+    - echo "Pushed image: $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$COMMIT_SHA"
+  needs: [build-image]
+  when: on_success  # Only push if build succeeds
