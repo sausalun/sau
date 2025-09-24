@@ -4,4 +4,4 @@ stages:
 test_job:
   stage: test
   script:
-    - echo "Hello from GitLab Runner!"
+    - echo "Hello hi from GitLab Runner!"
